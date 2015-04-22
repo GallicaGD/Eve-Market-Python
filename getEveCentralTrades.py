@@ -31,6 +31,9 @@ runID = int(time.time())
 sdeconn = sqlite3.connect(db_eveSDE)
 dataconn = sqlite3.connect(db_eveData)
 
+sdeconn.row_factory = sqlite3.Row
+dataconn.row_factory = sqlite3.Row
+
 def getIDForName(name, type='system'):
 
     if type == 'system':
@@ -54,21 +57,46 @@ def getIDForName(name, type='system'):
 
 def getNameForID(id, type='system'):
 
+    name = ''
+
     if type == 'system':
         sql = 'select solarSystemName from mapSolarSystems where solarSystemID = ?'
     if type == 'region':
         sql = 'select regionName from mapRegions where regionID = ?'
     if type == 'item':
         sql = 'select typeName from invTypes where typeID = ?'
+    if type == 'marketGroup':
+        sql = 'select marketGroupName from invMarketGroups where marketGroupID = ?'
+    if type == 'group':
+        sql = 'select groupName from invGroups where groupID = ?'
+    if type == 'category':
+        sql = 'select categoryName from invCategories where categoryID = ?'
 
-    name = ''
-
-    if id:
+    if id and sql:
         for row in sdeconn.execute(sql, (id,)):
             name = row[0]
 
     return name
 
+def getTypeIDInfo(typeID, data=None):
+
+    if data is None:
+        data = ( 'marketGroupID', 'groupID', 'categoryID')
+
+    sql = '''select * from invTypes t
+                inner join invMarketGroups m on t.marketGroupID = m.marketGroupID
+                inner join invGroups g on t.groupID = g.groupID
+                inner join invCategories c on g.categoryID = c.categoryID
+            where typeID = ?'''
+    typeInfo = {}
+    for row in sdeconn.execute(sql, (typeID,)):
+        for d in data:
+            typeInfo[d] = row[d]
+
+    return typeInfo
+
+def getTypeIDs(marketGroup=None, group=None, category=None):
+    pass
 
 def storeData(data, table='eveCentralData'):
 
@@ -111,6 +139,8 @@ def eveCentral(typeids, system=30000142, region=None):
 
     data_store = []
     for item in prices:
+        typeID = item['all']['forQuery']['types'][0]
+        info = getTypeIDInfo(typeID)
         tmp = {
             'buyMax': item['buy']['max'],
             'buyMin': item['buy']['min'],
@@ -122,12 +152,18 @@ def eveCentral(typeids, system=30000142, region=None):
             'sellMedian': item['sell']['median'],
             'sellFivePercent': item['sell']['fivePercent'],
             'sellVolume': item['sell']['volume'],
-            'typeID': item['all']['forQuery']['types'][0],
-            'typeName': getNameForID(item['all']['forQuery']['types'][0], 'item'),
+            'typeID': typeID,
+            'typeName': getNameForID(typeID, 'item'),
             'systemID': '',
             'systemName': '',
             'regionID': '',
             'regionName': '',
+            'marketGroupID': info['marketGroupID'],
+            'marketGroupName': getNameForID(info['marketGroupID'], 'marketGroup'),
+            'groupID': info['groupID'],
+            'groupName': getNameForID(info['groupID'], 'group'),
+            'categoryID': info['categoryID'],
+            'categoryName': getNameForID(info['categoryID'], 'category'),
             'runID': runID
         }
 
