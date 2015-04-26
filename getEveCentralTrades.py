@@ -21,12 +21,15 @@ import urllib.parse
 import json
 import sqlite3
 import time
+import math
+import itertools
 
 db_eveData = 'D:\\EVEData\\eveData.sqlite3'
 db_eveSDE = 'D:\\EVEData\\sqlite-scylla.sqlite'
 ##b_eveSDE = 'D:\\EVEData\\sqlite-latest.sqlite'
 
 runID = int(time.time())
+setSize = 100
 
 sdeconn = sqlite3.connect(db_eveSDE)
 dataconn = sqlite3.connect(db_eveData)
@@ -96,7 +99,35 @@ def getTypeIDInfo(typeID, data=None):
     return typeInfo
 
 def getTypeIDs(marketGroup=None, group=None, category=None):
-    pass
+
+    where = []
+    value = []
+
+    if marketGroup is not None:
+        where.append('m.marketGroupName = ?')
+        value.append(marketGroup)
+    if group is not None:
+        where.append('g.groupName = ?')
+        value.append(group)
+    if category is not None:
+        where.append('c.categoryName = ?')
+        value.append(category)
+
+    sql = '''select typeID
+             from invTypes t
+                inner join invMarketGroups m on t.marketGroupID = m.marketGroupID
+                inner join invGroups g on t.groupID = g.groupID
+                inner join invCategories c on g.categoryID = c.categoryID
+             where t.published = 1 and t.marketGroupID is not null'''
+
+    for wh in where:
+        sql += ' AND ' + wh
+
+    typeIDs = []
+    for row in sdeconn.execute(sql, tuple(value)):
+        typeIDs.append(row[0])
+
+    return typeIDs
 
 def storeData(data, table='eveCentralData'):
 
@@ -112,10 +143,14 @@ def storeData(data, table='eveCentralData'):
         table = table, columns = ','.join(cols), bind =','.join('?' for i in range(len(cols)))
     )
 
-    dataconn.executemany(sql, rows)
+    ##    dataconn.executemany(sql, rows)
+    cur = dataconn.cursor()
 
-    print('Total Rows: {0}'.format(dataconn.total_changes))
+    cur.executemany(sql, rows)
+    print('Total Rows: {0}'.format(cur.rowcount))
+    cur = ''
 
+##    print('Total Rows: {0}'.format(dataconn.total_changes))
 
 def eveCentral(typeids, system=30000142, region=None):
     payload = {}
@@ -126,57 +161,128 @@ def eveCentral(typeids, system=30000142, region=None):
 
     marketEndpoint = 'http://api.eve-central.com/api/marketstat/json'
 
-    payload['typeid'] = typeids
-    data = urllib.parse.urlencode(payload, True)
-    data = data.encode('utf-8')
+    iter = math.ceil(len(typeids) / setSize)
+##    if iter== 0: iter = 1
+    start = 0
+    stop = start + setSize
 
-    request = urllib.request.Request(marketEndpoint)
-    request.add_header('Content-Type', 'application/x-www-form-urlencoded;charset=utf-8')
+    for n in range(iter):
+        print('Iteration: {0} Start: {1} Stop: {2}'.format(n, start, stop))
+        checkTypeIds = []
+        for tid in itertools.islice(typeids, start, stop):
+            checkTypeIds.append(tid)
+##        if stop in typeids:
+##            for i in range(start, stop):
+##                checkTypeIds.append(typeids[i])
+##        else:
+##            checkTypeIds = typeids
 
-    response = urllib.request.urlopen(request, data)
+        start += setSize
+        stop= start + setSize
 
-    prices = json.loads(response.read().decode('utf-8'))
+        payload['typeid'] = checkTypeIds
+        data = urllib.parse.urlencode(payload, True)
+        data = data.encode('utf-8')
 
-    data_store = []
-    for item in prices:
-        typeID = item['all']['forQuery']['types'][0]
-        info = getTypeIDInfo(typeID)
-        tmp = {
-            'buyMax': item['buy']['max'],
-            'buyMin': item['buy']['min'],
-            'buyMedian': item['buy']['median'],
-            'buyFivePercent': item['buy']['fivePercent'],
-            'buyVolume': item['buy']['volume'],
-            'sellMax': item['sell']['max'],
-            'sellMin': item['sell']['min'],
-            'sellMedian': item['sell']['median'],
-            'sellFivePercent': item['sell']['fivePercent'],
-            'sellVolume': item['sell']['volume'],
-            'typeID': typeID,
-            'typeName': getNameForID(typeID, 'item'),
-            'systemID': '',
-            'systemName': '',
-            'regionID': '',
-            'regionName': '',
-            'marketGroupID': info['marketGroupID'],
-            'marketGroupName': getNameForID(info['marketGroupID'], 'marketGroup'),
-            'groupID': info['groupID'],
-            'groupName': getNameForID(info['groupID'], 'group'),
-            'categoryID': info['categoryID'],
-            'categoryName': getNameForID(info['categoryID'], 'category'),
-            'runID': runID
-        }
+        request = urllib.request.Request(marketEndpoint)
+        request.add_header('Content-Type', 'application/x-www-form-urlencoded;charset=utf-8')
 
-        if item['all']['forQuery']['systems']:
-            tmp['systemID'] = item['all']['forQuery']['systems'][0]
-            tmp['systemName'] = getNameForID(item['all']['forQuery']['systems'][0], 'system')
-        if item['all']['forQuery']['regions']:
-            tmp['regionID'] = item['all']['forQuery']['regions'][0]
-            tmp['regionName'] = getNameForID(item['all']['forQuery']['regions'][0], 'region')
+        response = urllib.request.urlopen(request, data)
 
-        data_store.append(tmp)
+        prices = json.loads(response.read().decode('utf-8'))
 
-    storeData(data_store)
+        data_store = []
+        for item in prices:
+            typeID = item['all']['forQuery']['types'][0]
+            info = getTypeIDInfo(typeID)
+            tmp = {
+                'buyMax': item['buy']['max'],
+                'buyMin': item['buy']['min'],
+                'buyMedian': item['buy']['median'],
+                'buyFivePercent': item['buy']['fivePercent'],
+                'buyVolume': item['buy']['volume'],
+                'sellMax': item['sell']['max'],
+                'sellMin': item['sell']['min'],
+                'sellMedian': item['sell']['median'],
+                'sellFivePercent': item['sell']['fivePercent'],
+                'sellVolume': item['sell']['volume'],
+                'typeID': typeID,
+                'typeName': getNameForID(typeID, 'item'),
+                'systemID': '',
+                'systemName': '',
+                'regionID': '',
+                'regionName': '',
+                'marketGroupID': info['marketGroupID'],
+                'marketGroupName': getNameForID(info['marketGroupID'], 'marketGroup'),
+                'groupID': info['groupID'],
+                'groupName': getNameForID(info['groupID'], 'group'),
+                'categoryID': info['categoryID'],
+                'categoryName': getNameForID(info['categoryID'], 'category'),
+                'runID': runID
+            }
+
+            if item['all']['forQuery']['systems']:
+                tmp['systemID'] = item['all']['forQuery']['systems'][0]
+                tmp['systemName'] = getNameForID(item['all']['forQuery']['systems'][0], 'system')
+            if item['all']['forQuery']['regions']:
+                tmp['regionID'] = item['all']['forQuery']['regions'][0]
+                tmp['regionName'] = getNameForID(item['all']['forQuery']['regions'][0], 'region')
+
+            data_store.append(tmp)
+
+        storeData(data_store)
+
+##    payload['typeid'] = typeids
+##    data = urllib.parse.urlencode(payload, True)
+##    data = data.encode('utf-8')
+##
+##    request = urllib.request.Request(marketEndpoint)
+##    request.add_header('Content-Type', 'application/x-www-form-urlencoded;charset=utf-8')
+##
+##    response = urllib.request.urlopen(request, data)
+##
+##    prices = json.loads(response.read().decode('utf-8'))
+##
+##    data_store = []
+##    for item in prices:
+##        typeID = item['all']['forQuery']['types'][0]
+##        info = getTypeIDInfo(typeID)
+##        tmp = {
+##            'buyMax': item['buy']['max'],
+##            'buyMin': item['buy']['min'],
+##            'buyMedian': item['buy']['median'],
+##            'buyFivePercent': item['buy']['fivePercent'],
+##            'buyVolume': item['buy']['volume'],
+##            'sellMax': item['sell']['max'],
+##            'sellMin': item['sell']['min'],
+##            'sellMedian': item['sell']['median'],
+##            'sellFivePercent': item['sell']['fivePercent'],
+##            'sellVolume': item['sell']['volume'],
+##            'typeID': typeID,
+##            'typeName': getNameForID(typeID, 'item'),
+##            'systemID': '',
+##            'systemName': '',
+##            'regionID': '',
+##            'regionName': '',
+##            'marketGroupID': info['marketGroupID'],
+##            'marketGroupName': getNameForID(info['marketGroupID'], 'marketGroup'),
+##            'groupID': info['groupID'],
+##            'groupName': getNameForID(info['groupID'], 'group'),
+##            'categoryID': info['categoryID'],
+##            'categoryName': getNameForID(info['categoryID'], 'category'),
+##            'runID': runID
+##        }
+##
+##        if item['all']['forQuery']['systems']:
+##            tmp['systemID'] = item['all']['forQuery']['systems'][0]
+##            tmp['systemName'] = getNameForID(item['all']['forQuery']['systems'][0], 'system')
+##        if item['all']['forQuery']['regions']:
+##            tmp['regionID'] = item['all']['forQuery']['regions'][0]
+##            tmp['regionName'] = getNameForID(item['all']['forQuery']['regions'][0], 'region')
+##
+##        data_store.append(tmp)
+##
+##    storeData(data_store)
 
 def main():
     TYPEIDS = [ 34,35,36,37,38,39,40,11399,  # Minerals
@@ -200,18 +306,40 @@ def main():
     systemnames = ('Amarr', 'Dodixie','Jita', 'Rens', 'Hek')
     regionNames = ( 'Heimatar', 'Metropolis', 'Molden Heath')
 
+    groups = ( 'Mineral', 'Projectile Ammo')
+
+##    typeIDs = TYPEIDS
+##    typeIDs = getTypeIDs(marketGroup = 'Minerals')
+##    for group in groups:
+##        typeIDs = getTypeIDs(group = group )
+##
+##        for name in systemnames:
+##            systemID = getIDForName(name, 'system')
+##            print("System: %s | %s" % (name, systemID))
+##            eveCentral(typeIDs,system=systemID)
+##            time.sleep(1)
+##
+##        for name in regionNames:
+##            regionID = getIDForName(name, 'region')
+##            print("Region: %s | %s" % (name, regionID))
+##            eveCentral(typeIDs,system=None,region=regionID)
+##            time.sleep(1)
+
+    typeIDs = getTypeIDs()
+
     for name in systemnames:
         systemID = getIDForName(name, 'system')
         print("System: %s | %s" % (name, systemID))
-        eveCentral(TYPEIDS,system=systemID)
+        eveCentral(typeIDs,system=systemID)
         time.sleep(1)
 
     for name in regionNames:
         regionID = getIDForName(name, 'region')
         print("Region: %s | %s" % (name, regionID))
-        eveCentral(TYPEIDS,system=None,region=regionID)
+        eveCentral(typeIDs,system=None,region=regionID)
         time.sleep(1)
 
+    print('Overall Total Rows: {0}'.format(dataconn.total_changes))
 ##    for systemID in SYSTEMIDS:
 ##        eveCentral(TYPEIDS, system=systemID)
 
